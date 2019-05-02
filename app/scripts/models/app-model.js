@@ -17,6 +17,7 @@ const Format = require('../util/format');
 const UrlUtil = require('../util/url-util');
 const AutoType = require('../auto-type');
 const Launcher = require('../comp/launcher');
+const RuntimeInfo = require('../comp/runtime-info');
 const PluginManager = require('../plugins/plugin-manager');
 
 require('../mixins/protected-value-ex');
@@ -33,7 +34,8 @@ const AppModel = Backbone.Model.extend({
         this.sort = 'title';
         this.settings = AppSettingsModel.instance;
         this.activeEntryId = null;
-        this.isBeta = FeatureDetector.isBeta;
+        this.isBeta = RuntimeInfo.beta;
+        this.advancedSearch = null;
 
         this.listenTo(Backbone, 'refresh', this.refresh);
         this.listenTo(Backbone, 'set-filter', this.setFilter);
@@ -41,6 +43,7 @@ const AppModel = Backbone.Model.extend({
         this.listenTo(Backbone, 'set-sort', this.setSort);
         this.listenTo(Backbone, 'empty-trash', this.emptyTrash);
         this.listenTo(Backbone, 'select-entry', this.selectEntry);
+        this.listenTo(Backbone, 'unset-keyfile', this.unsetKeyFile);
 
         this.appLogger = new Logger('app');
 
@@ -124,7 +127,15 @@ const AppModel = Backbone.Model.extend({
                 .forEach(fi => this.fileInfos.unshift(fi));
         }
         if (config.plugins) {
-            return Promise.all(config.plugins.map(plugin => PluginManager.installIfNew(plugin.url, plugin.manifest, true)));
+            const pluginsPromises = config.plugins
+                .map(plugin => PluginManager.installIfNew(plugin.url, plugin.manifest, true));
+            return Promise.all(pluginsPromises).then(() => {
+                this.settings.set(config.settings);
+            });
+        }
+        if (config.advancedSearch) {
+            this.advancedSearch = config.advancedSearch;
+            this.addFilter({advanced: this.advancedSearch});
         }
     },
 
@@ -229,8 +240,11 @@ const AppModel = Backbone.Model.extend({
     },
 
     setFilter: function(filter) {
-        this.filter = filter;
+        this.filter = this.prepareFilter(filter);
         this.filter.subGroups = this.settings.get('expandGroups');
+        if (!this.filter.advanced && this.advancedSearch) {
+            this.filter.advanced = this.advancedSearch;
+        }
         const entries = this.getEntries();
         if (!this.activeEntryId || !entries.get(this.activeEntryId)) {
             const firstEntry = entries.first();
@@ -260,7 +274,7 @@ const AppModel = Backbone.Model.extend({
 
     getEntries: function() {
         const entries = this.getEntriesByFilter(this.filter);
-        entries.sortEntries(this.sort);
+        entries.sortEntries(this.sort, this.filter);
         if (this.filter.trash) {
             this.addTrashGroups(entries);
         }
@@ -268,10 +282,10 @@ const AppModel = Backbone.Model.extend({
     },
 
     getEntriesByFilter: function(filter) {
-        filter = this.prepareFilter(filter);
+        const preparedFilter = this.prepareFilter(filter);
         const entries = new EntryCollection();
         this.files.forEach(file => {
-            file.forEachEntry(filter, entry => entries.push(entry));
+            file.forEachEntry(preparedFilter, entry => entries.push(entry));
         });
         return entries;
     },
@@ -289,12 +303,8 @@ const AppModel = Backbone.Model.extend({
 
     prepareFilter: function(filter) {
         filter = _.clone(filter);
-        if (filter.text) {
-            filter.textLower = filter.text.toLowerCase();
-        }
-        if (filter.tag) {
-            filter.tagLower = filter.tag.toLowerCase();
-        }
+        filter.textLower = filter.text ? filter.text.toLowerCase() : '';
+        filter.tagLower = filter.tag ? filter.tag.toLowerCase() : '';
         return filter;
     },
 
@@ -886,6 +896,16 @@ const AppModel = Backbone.Model.extend({
         this.fileInfos.save();
     },
 
+    unsetKeyFile: function (fileId) {
+        const fileInfo = this.fileInfos.get(fileId);
+        fileInfo.set({
+            keyFileName: null,
+            keyFilePath: null,
+            keyFileHash: null
+        });
+        this.fileInfos.save();
+    },
+
     setFileBackup: function(fileId, backup) {
         const fileInfo = this.fileInfos.get(fileId);
         if (fileInfo) {
@@ -997,12 +1017,12 @@ const AppModel = Backbone.Model.extend({
     },
 
     saveFileFingerprint: function(file, password) {
-        if (Launcher && Launcher.fingerprints && password) {
+        if (Launcher && Launcher.fingerprints && !file.has('fingerprint')) {
             const fileInfo = this.fileInfos.get(file.id);
-            Launcher.fingerprints.register(file.id, this.params.password, token => {
+            Launcher.fingerprints.register(file.id, password, token => {
                 if (token) {
-                    fileInfo.set('fingerprint', token);
-                    this.model.fileInfos.save();
+                    fileInfo.set({ fingerprint: token });
+                    this.fileInfos.save();
                 }
             });
         }

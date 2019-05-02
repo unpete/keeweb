@@ -7,7 +7,6 @@ const SecureInput = require('../comp/secure-input');
 const DropboxChooser = require('../comp/dropbox-chooser');
 const KeyHandler = require('../comp/key-handler');
 const StorageFileListView = require('../views/storage-file-list-view');
-const FeatureDetector = require('../util/feature-detector');
 const Logger = require('../util/logger');
 const Locale = require('../util/locale');
 const UrlUtil = require('../util/url-util');
@@ -15,6 +14,8 @@ const InputFx = require('../util/input-fx');
 const Comparators = require('../util/comparators');
 const Storage = require('../storage');
 const Launcher = require('../comp/launcher');
+const FocusDetector = require('../comp/focus-detector');
+const FeatureDetector = require('../util/feature-detector');
 
 const logger = new Logger('open-view');
 
@@ -47,6 +48,7 @@ const OpenView = Backbone.View.extend({
     params: null,
     passwordInput: null,
     busy: false,
+    currentSelectedIndex: -1,
 
     initialize: function () {
         this.views = {};
@@ -63,6 +65,12 @@ const OpenView = Backbone.View.extend({
         };
         this.passwordInput = new SecureInput();
         KeyHandler.onKey(Keys.DOM_VK_Z, this.undoKeyPress, this, KeyHandler.SHORTCUT_ACTION);
+        KeyHandler.onKey(Keys.DOM_VK_TAB, this.tabKeyPress, this);
+        KeyHandler.onKey(Keys.DOM_VK_ENTER, this.enterKeyPress, this);
+        KeyHandler.onKey(Keys.DOM_VK_RETURN, this.enterKeyPress, this);
+        KeyHandler.onKey(Keys.DOM_VK_DOWN, this.moveOpenFileSelectionDown, this);
+        KeyHandler.onKey(Keys.DOM_VK_UP, this.moveOpenFileSelectionUp, this);
+        this.listenTo(Backbone, 'main-window-focus', this.windowFocused.bind(this));
     },
 
     render: function () {
@@ -99,8 +107,12 @@ const OpenView = Backbone.View.extend({
         return this;
     },
 
-    focusInput: function() {
-        if (!FeatureDetector.isMobile) {
+    windowFocused: function() {
+        this.inputEl.focus();
+    },
+
+    focusInput: function(focusOnMobile) {
+        if (FocusDetector.hasFocus() && (focusOnMobile || !FeatureDetector.isMobile)) {
             this.inputEl.focus();
         }
     },
@@ -136,6 +148,11 @@ const OpenView = Backbone.View.extend({
     remove: function() {
         this.passwordInput.reset();
         KeyHandler.offKey(Keys.DOM_VK_Z, this.undoKeyPress, this);
+        KeyHandler.offKey(Keys.DOM_VK_TAB, this.tabKeyPress, this);
+        KeyHandler.offKey(Keys.DOM_VK_ENTER, this.enterKeyPress, this);
+        KeyHandler.offKey(Keys.DOM_VK_RETURN, this.enterKeyPress, this);
+        KeyHandler.offKey(Keys.DOM_VK_DOWN, this.moveOpenFileSelectionDown, this);
+        KeyHandler.offKey(Keys.DOM_VK_UP, this.moveOpenFileSelectionUp, this);
         Backbone.View.prototype.remove.apply(this, arguments);
     },
 
@@ -260,7 +277,7 @@ const OpenView = Backbone.View.extend({
 
     displayOpenKeyFile: function() {
         this.$el.toggleClass('open--key-file', !!this.params.keyFileName);
-        this.$el.find('.open__settings-key-file-name').text(this.params.keyFilePath || this.params.keyFileName || Locale.openKeyFile);
+        this.$el.find('.open__settings-key-file-name').text(this.params.keyFileName || this.params.keyFilePath || Locale.openKeyFile);
         this.focusInput();
     },
 
@@ -368,21 +385,7 @@ const OpenView = Backbone.View.extend({
         }
 
         const fileInfo = this.model.fileInfos.get(id);
-        this.showOpenFileInfo(fileInfo);
-
-        if (fileInfo && Launcher && Launcher.fingerprints) {
-            this.openFileWithFingerprint(fileInfo);
-        }
-    },
-
-    openFileWithFingerprint(fileInfo) {
-        if (fileInfo.get('fingerprint')) {
-            Launcher.fingerprints.auth(fileInfo.id, fileInfo.get('fingerprint'), password => {
-                this.inputEl.val(password);
-                this.inputEl.trigger('input');
-                this.openDb();
-            });
-        }
+        this.showOpenFileInfo(fileInfo, true);
     },
 
     removeFile: function(id) {
@@ -427,6 +430,13 @@ const OpenView = Backbone.View.extend({
             return;
         }
         e.preventDefault();
+        e.stopPropagation();
+        const dt = e.originalEvent.dataTransfer;
+        if (!dt.types || (dt.types.indexOf ? dt.types.indexOf('Files') === -1 : !dt.types.contains('Files'))) {
+            dt.dropEffect = 'none';
+            return;
+        }
+        dt.dropEffect = 'copy';
         if (this.dragTimeout) {
             clearTimeout(this.dragTimeout);
         }
@@ -469,11 +479,22 @@ const OpenView = Backbone.View.extend({
         }
     },
 
-    undoKeyPress: function(e) {
+    undoKeyPress(e) {
         e.preventDefault();
     },
 
-    showOpenFileInfo: function(fileInfo) {
+    tabKeyPress() {
+        this.$el.addClass('open--show-focus');
+    },
+
+    enterKeyPress(e) {
+        const el = this.$el.find('[tabindex]:focus');
+        if (el.length) {
+            el.trigger('click', e);
+        }
+    },
+
+    showOpenFileInfo: function(fileInfo, fileWasClicked) {
         if (this.busy || !fileInfo) {
             return;
         }
@@ -488,9 +509,15 @@ const OpenView = Backbone.View.extend({
         this.params.keyFileData = null;
         this.displayOpenFile();
         this.displayOpenKeyFile();
+
+        this.openFileWithFingerprint(fileInfo);
+
+        if (fileWasClicked) {
+            this.focusInput(true);
+        }
     },
 
-    showOpenLocalFile: function(path) {
+    showOpenLocalFile: function(path, keyFilePath) {
         if (this.busy) {
             return;
         }
@@ -501,6 +528,27 @@ const OpenView = Backbone.View.extend({
         this.params.rev = null;
         this.params.fileData = null;
         this.displayOpenFile();
+        if (keyFilePath) {
+            const parsed = Launcher.parsePath(keyFilePath);
+            this.params.keyFileName = parsed.file;
+            this.params.keyFilePath = keyFilePath;
+            this.params.keyFileData = null;
+            this.displayOpenKeyFile();
+        }
+    },
+
+    openFileWithFingerprint: function(fileInfo) {
+        if (!fileInfo.has('fingerprint')) {
+            return;
+        }
+
+        if (Launcher && Launcher.fingerprints) {
+            Launcher.fingerprints.auth(fileInfo.id, fileInfo.get('fingerprint'), password => {
+                this.inputEl.val(password);
+                this.inputEl.trigger('input');
+                this.openDb();
+            });
+        }
     },
 
     createDemo: function() {
@@ -542,7 +590,7 @@ const OpenView = Backbone.View.extend({
         this.inputEl.removeAttr('disabled').toggleClass('input--error', !!err);
         if (err) {
             logger.error('Error opening file', err);
-            this.focusInput();
+            this.focusInput(true);
             this.inputEl[0].selectionStart = 0;
             this.inputEl[0].selectionEnd = this.inputEl.val().length;
             if (err.code === 'InvalidKey') {
@@ -782,6 +830,33 @@ const OpenView = Backbone.View.extend({
             this.params.fileData = null;
             this.displayOpenFile();
         }
+    },
+
+    moveOpenFileSelection: function(steps) {
+        const lastOpenFiles = this.getLastOpenFiles();
+        if (this.currentSelectedIndex + steps >= 0 &&
+            this.currentSelectedIndex + steps <= lastOpenFiles.length - 1) {
+            this.currentSelectedIndex = this.currentSelectedIndex + steps;
+        }
+
+        const lastOpenFile = lastOpenFiles[this.currentSelectedIndex];
+        if (!lastOpenFile) {
+            return;
+        }
+        const fileInfo = this.model.fileInfos.get(lastOpenFiles[this.currentSelectedIndex].id);
+        this.showOpenFileInfo(fileInfo);
+
+        if (fileInfo && Launcher && Launcher.fingerprints) {
+            this.openFileWithFingerprint(fileInfo);
+        }
+    },
+
+    moveOpenFileSelectionDown: function() {
+        this.moveOpenFileSelection(1);
+    },
+
+    moveOpenFileSelectionUp: function() {
+        this.moveOpenFileSelection(-1);
     }
 });
 

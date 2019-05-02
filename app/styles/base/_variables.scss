@@ -1,7 +1,7 @@
 // Typography
 $base-font-family: -apple-system, "BlinkMacSystemFont", "Helvetica Neue", "Helvetica", "Roboto", "Arial", "Microsoft YaHei", "微软雅黑", "PingFang SC", "Hiragino Sans GB", "STXihei", "华文细黑", sans-serif;
 $heading-font-family: $base-font-family;
-$monospace-font-family: monaco,Consolas,"Lucida Console",monospace;
+$monospace-font-family: "SFMono-Regular",Monaco,Consolas,"Lucida Console",monospace;
 
 // Font Sizes
 $base-font-size: 12px;
@@ -36,6 +36,7 @@ $titlebar-padding-large: 40px;
 @function selected-border() { @return selected-border-width() solid th(action-color); }
 @function selected-hover-border() { @return 1px solid th(action-color); }
 @function selected-transparent-border() { @return 1px solid transparent; }
+@function focused-outline() { @return 1px solid th(action-color); }
 
 // Forms
 @function form-box-shadow() { @return inset 0 1px 3px rgba(0, 0, 0, 0.06); }

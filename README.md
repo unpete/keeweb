@@ -35,12 +35,18 @@ To make Dropbox work in your self-hosted app, [go to this Wiki page](https://git
 
 # Building
 
-The app can be built with grunt: `grunt` (html file will be in `dist/`).    
-Desktop apps are built with `grunt desktop`. This works only in mac osx as it builds dmg; requires wine.  
-To run Electron app without building installer, build the app with `grunt` and start in this way:
+The easiest way to clone all KeeWeb repos is:
 ```bash
-$ grunt dev
-$ npm run-script electron
+curl https://raw.githubusercontent.com/keeweb/keeweb/develop/dev-env.sh | bash -
+```
+
+The app can be built with grunt: `grunt` (html file will be in `dist/`).    
+Desktop apps are built with `grunt desktop`. This works only in macOS as it builds dmg; requires wine.  
+Also, a hardware token is required.  
+To run Electron app without building an installer, build the app with `grunt` and start it this way:
+```bash
+grunt dev
+npm run-script electron
 ```
 
 For debug build:
@@ -50,9 +56,8 @@ For debug build:
 
 # Contributing
 
-Please, read contribution guidelines: [for issues](.github/ISSUE_TEMPLATE.md) and [for pull requests](.github/PULL_REQUEST_TEMPLATE.md).  
-For pull requests: branch is important! `master` is only for hotfixes, `develop` is for new features.  
-Here's a [list of issues](https://github.com/keeweb/keeweb/labels/need%20help) which need help.
+Please read contribution guidelines [for pull requests](.github/PULL_REQUEST_TEMPLATE.md).  
+Here's a [list of issues](https://github.com/keeweb/keeweb/labels/help%20wanted) where your help would be very welcome.
 Also you can help by [translating KeeWeb](https://keeweb.oneskyapp.com) to your language.  
 
 ### Important notes for pull requests

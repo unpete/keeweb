@@ -9,6 +9,7 @@ const Logger = require('../util/logger');
 const Locale = require('../util/locale');
 const Timeouts = require('../const/timeouts');
 const AppSettingsModel = require('../models/app-settings-model');
+const AutoTypeSequenceType = require('../const/autotype-sequencetype');
 
 const logger = new Logger('auto-type');
 const clearTextAutoTypeLog = localStorage.autoTypeDebug;
@@ -37,7 +38,7 @@ const AutoType = {
             return;
         }
         if (entry) {
-            this.hideWindow(() => { this.runAndHandleResult(entry); });
+            this.hideWindow(() => { this.runAndHandleResult({ entry }); });
         } else {
             if (this.selectEntryView) {
                 return;
@@ -53,8 +54,8 @@ const AutoType = {
         }
     },
 
-    runAndHandleResult(entry) {
-        this.run(entry, err => {
+    runAndHandleResult(result) {
+        this.run(result, err => {
             if (err) {
                 Alerts.error({
                     header: Locale.autoTypeError,
@@ -68,23 +69,30 @@ const AutoType = {
         }
     },
 
-    run(entry, callback) {
+    run(result, callback) {
         this.running = true;
-        const sequence = entry.getEffectiveAutoTypeSeq();
+        let sequence;
+        if (result.sequenceType === AutoTypeSequenceType.PASSWORD) {
+            sequence = '{PASSWORD}';
+        } else if (result.sequenceType === AutoTypeSequenceType.USERNAME) {
+            sequence = '{USERNAME}';
+        } else {
+            sequence = result.entry.getEffectiveAutoTypeSeq();
+        }
         logger.debug('Start', sequence);
         const ts = logger.ts();
         try {
             const parser = new AutoTypeParser(sequence);
             const runner = parser.parse();
             logger.debug('Parsed', this.printOps(runner.ops));
-            runner.resolve(entry, err => {
+            runner.resolve(result.entry, err => {
                 if (err) {
                     this.running = false;
                     logger.error('Resolve error', err);
                     return callback && callback(err);
                 }
                 logger.debug('Resolved', this.printOps(runner.ops));
-                if (entry.autoTypeObfuscation) {
+                if (result.entry.autoTypeObfuscation) {
                     try {
                         runner.obfuscate();
                     } catch (e) {
@@ -156,6 +164,14 @@ const AutoType = {
             if (err) {
                 logger.error('Error get window title', err);
             } else {
+                if (!url) {
+                    // try to find a URL in the title
+                    const urlMatcher = new RegExp(
+                        'https?:\\/\\/(www\\.)?[-a-zA-Z0-9@:%._\\+~#=]{2,256}\\.[a-z]{2,4}\\b([-a-zA-Z0-9@:%_\\+.~#?&//=]*)'
+                    );
+                    const urlMatches = urlMatcher.exec(title);
+                    url = urlMatches && urlMatches.length > 0 ? urlMatches[0] : null;
+                }
                 logger.debug('Window title', title, url);
             }
             return callback(err, title, url);
@@ -183,9 +199,9 @@ const AutoType = {
 
     processEventWithFilter(evt) {
         const entries = evt.filter.getEntries();
-        if (entries.length === 1) {
+        if (entries.length === 1 && AppSettingsModel.instance.get('directAutotype')) {
             this.hideWindow(() => {
-                this.runAndHandleResult(entries.at(0));
+                this.runAndHandleResult({ entry: entries.at(0) });
             });
             return;
         }
@@ -204,6 +220,14 @@ const AutoType = {
                     this.runAndHandleResult(result);
                 }
             });
+        });
+        this.selectEntryView.on('show-open-files', () => {
+            this.selectEntryView.hide();
+            Backbone.trigger('open-file');
+            Backbone.once('closed-open-view', () => {
+                this.selectEntryView.show();
+                this.selectEntryView.setupKeys();
+            }, this);
         });
     },
 

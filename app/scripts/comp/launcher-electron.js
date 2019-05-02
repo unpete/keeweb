@@ -9,6 +9,7 @@ const Launcher = {
     version: window.process.versions.electron,
     autoTypeSupported: true,
     thirdPartyStoragesSupported: true,
+    clipboardSupported: true,
     req: window.require,
     platform: function() {
         return process.platform;
@@ -27,7 +28,7 @@ const Launcher = {
     },
     devTools: true,
     openDevTools: function() {
-        this.electron().remote.getCurrentWindow().openDevTools();
+        this.electron().remote.getCurrentWindow().openDevTools({ mode: 'bottom' });
     },
     getSaveFileName: function(defaultPath, callback) {
         if (defaultPath) {
@@ -66,7 +67,7 @@ const Launcher = {
         return this.req('path').join(...parts);
     },
     writeFile: function(path, data, callback) {
-        this.req('fs').writeFile(path, new window.Buffer(data), callback);
+        this.req('fs').writeFile(path, window.Buffer.from(data), callback);
     },
     readFile: function(path, encoding, callback) {
         this.req('fs').readFile(path, encoding, (err, contents) => {
@@ -78,7 +79,7 @@ const Launcher = {
         this.req('fs').exists(path, callback);
     },
     deleteFile: function(path, callback) {
-        this.req('fs').unlink(path, callback);
+        this.req('fs').unlink(path, callback || _.noop);
     },
     statFile: function(path, callback) {
         this.req('fs').stat(path, (err, stats) => callback(stats, err));
@@ -200,7 +201,7 @@ const Launcher = {
     hideApp: function() {
         const app = this.remoteApp();
         if (this.canMinimize()) {
-            app.getMainWindow().minimize();
+            app.minimizeThenHideIfInTray();
         } else {
             app.hide();
         }
@@ -211,6 +212,7 @@ const Launcher = {
     showMainWindow: function() {
         const win = this.getMainWindow();
         win.show();
+        win.focus();
         win.restore();
     },
     spawn: function(config) {
@@ -263,6 +265,20 @@ const Launcher = {
                 session.cookies.set(cookie, () => {});
             }
         }
+    },
+    checkOpenFiles() {
+        this.readyToOpenFiles = true;
+        if (this.pendingFileToOpen) {
+            this.openFile(this.pendingFileToOpen);
+            delete this.pendingFileToOpen;
+        }
+    },
+    openFile(file) {
+        if (this.readyToOpenFiles) {
+            Backbone.trigger('launcher-open-file', file);
+        } else {
+            this.pendingFileToOpen = file;
+        }
     }
 };
 
@@ -270,13 +286,12 @@ Backbone.on('launcher-exit-request', () => {
     setTimeout(() => Launcher.exit(), 0);
 });
 Backbone.on('launcher-minimize', () => setTimeout(() => Backbone.trigger('app-minimized'), 0));
-window.launcherOpen = function(path) {
-    Backbone.trigger('launcher-open-file', path);
-};
+window.launcherOpen = file => Launcher.openFile(file);
 if (window.launcherOpenedFile) {
     logger.info('Open file request', window.launcherOpenedFile);
-    Backbone.trigger('launcher-open-file', window.launcherOpenedFile);
+    Launcher.openFile(window.launcherOpenedFile);
     delete window.launcherOpenedFile;
 }
+Backbone.on('app-ready', () => setTimeout(() => Launcher.checkOpenFiles(), 0));
 
 module.exports = Launcher;

@@ -52,24 +52,28 @@ const GroupModel = MenuItemModel.extend({
         this._fillByGroup(true);
         const items = this.get('items');
         const entries = this.get('entries');
-        group.groups.forEach(function(subGroup) {
-            const existing = file.getGroup(file.subId(subGroup.uuid.id));
-            if (existing) {
-                existing.setGroup(subGroup, file, this);
-                items.add(existing);
+
+        const itemsArray = group.groups.map(subGroup => {
+            let g = file.getGroup(file.subId(subGroup.uuid.id));
+            if (g) {
+                g.setGroup(subGroup, file, this);
             } else {
-                items.add(GroupModel.fromGroup(subGroup, file, this));
+                g = GroupModel.fromGroup(subGroup, file, this);
             }
+            return g;
         }, this);
-        group.entries.forEach(function(entry) {
-            const existing = file.getEntry(file.subId(entry.uuid.id));
-            if (existing) {
-                existing.setEntry(entry, this, file);
-                entries.add(existing);
+        items.add(itemsArray);
+
+        const entriesArray = group.entries.map(entry => {
+            let e = file.getEntry(file.subId(entry.uuid.id));
+            if (e) {
+                e.setEntry(entry, this, file);
             } else {
-                entries.add(EntryModel.fromEntry(entry, this, file));
+                e = EntryModel.fromEntry(entry, this, file);
             }
+            return e;
         }, this);
+        entries.add(entriesArray);
     },
 
     _fillByGroup: function(silent) {
@@ -128,8 +132,7 @@ const GroupModel = MenuItemModel.extend({
         return (filter && filter.includeDisabled ||
                 this.group.enableSearching !== false &&
                 !this.group.uuid.equals(this.file.db.meta.entryTemplatesGroup)
-            ) &&
-            (!filter || !filter.autoType || this.group.enableAutoType !== false);
+        ) && (!filter || !filter.autoType || this.group.enableAutoType !== false);
     },
 
     getOwnSubGroups: function() {
@@ -309,7 +312,11 @@ const GroupModel = MenuItemModel.extend({
                 return;
             }
         }
-        const atIndex = this.parentGroup.group.groups.indexOf(this.group);
+        let atIndex = this.parentGroup.group.groups.indexOf(this.group);
+        const selfIndex = this.parentGroup.group.groups.indexOf(object.group);
+        if (selfIndex >= 0 && selfIndex < atIndex) {
+            atIndex--;
+        }
         if (atIndex >= 0) {
             this.file.db.move(object.group, this.parentGroup.group, atIndex);
         }

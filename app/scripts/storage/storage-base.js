@@ -4,7 +4,6 @@ const AppSettingsModel = require('../models/app-settings-model');
 const RuntimeDataModel = require('../models/runtime-data-model');
 const Links = require('../const/links');
 const FeatureDetector = require('../util/feature-detector');
-const CookieManager = require('../comp/cookie-manager');
 
 const MaxRequestRetries = 3;
 
@@ -39,6 +38,12 @@ _.extend(StorageBase.prototype, {
             this._oauthProcessReturn(this._oauthReturnMessage);
             delete this._oauthReturnMessage;
             delete sessionStorage.authStorage;
+            if (FeatureDetector.isStandalone) {
+                const [url, urlParams] = location.href.split(/[?#]/);
+                if (urlParams) {
+                    location.href = url;
+                }
+            }
         }
         return this;
     },
@@ -86,7 +91,7 @@ _.extend(StorageBase.prototype, {
             return config.error && config.error('timeout', xhr);
         });
         xhr.open(config.method || 'GET', config.url);
-        if (this._oauthToken) {
+        if (this._oauthToken && !config.skipAuth) {
             xhr.setRequestHeader('Authorization', 'Bearer ' + this._oauthToken.accessToken);
         }
         _.forEach(config.headers, (value, key) => {
@@ -128,6 +133,7 @@ _.extend(StorageBase.prototype, {
         if (redirectUrl.lastIndexOf('file:', 0) === 0) {
             redirectUrl = Links.WebApp;
         }
+        redirectUrl = redirectUrl.split('?')[0];
         return redirectUrl;
     },
 
@@ -146,9 +152,11 @@ _.extend(StorageBase.prototype, {
             .replace('{scope}', encodeURIComponent(opts.scope))
             .replace('{url}', encodeURIComponent(this._getOauthRedirectUrl()));
         this.logger.debug('OAuth: popup opened');
-        if (!this._openPopup(url, 'OAuth', opts.width, opts.height)) {
+        const popupWindow = this._openPopup(url, 'OAuth', opts.width, opts.height);
+        if (!popupWindow) {
             return callback('OAuth: cannot open popup');
         }
+        this._popupOpened(popupWindow);
         const popupClosed = () => {
             Backbone.off('popup-closed', popupClosed);
             window.removeEventListener('message', windowMessage);
@@ -177,13 +185,15 @@ _.extend(StorageBase.prototype, {
         window.addEventListener('message', windowMessage);
     },
 
+    _popupOpened(popupWindow) {
+    },
+
     _oauthProcessReturn: function(message) {
         const token = this._oauthMsgToToken(message);
         if (token && !token.error) {
             this._oauthToken = token;
             this.runtimeData.set(this.name + 'OAuthToken', token);
             this.logger.debug('OAuth token received');
-            CookieManager.saveCookies();
         }
         return token;
     },

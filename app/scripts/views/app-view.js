@@ -31,6 +31,7 @@ const AppView = Backbone.View.extend({
     events: {
         'contextmenu': 'contextMenu',
         'drop': 'drop',
+        'dragenter': 'dragover',
         'dragover': 'dragover',
         'click a[target=_blank]': 'extLinkClick',
         'mousedown': 'bodyClick'
@@ -83,6 +84,7 @@ const AppView = Backbone.View.extend({
         this.listenTo(Backbone, 'app-minimized', this.appMinimized);
         this.listenTo(Backbone, 'show-context-menu', this.showContextMenu);
         this.listenTo(Backbone, 'second-instance', this.showSingleInstanceAlert);
+        this.listenTo(Backbone, 'file-modified', this.handleAutoSaveTimer);
 
         this.listenTo(UpdateModel.instance, 'change:updateReady', this.updateApp);
 
@@ -156,6 +158,9 @@ const AppView = Backbone.View.extend({
         this.hideKeyChange();
         this.views.open = new OpenView({ model: this.model });
         this.views.open.setElement(this.$el.find('.app__body')).render();
+        this.views.open.on('close', () => {
+            Backbone.trigger('closed-open-view');
+        }, this);
         this.views.open.on('close', this.showEntries, this);
     },
 
@@ -163,14 +168,15 @@ const AppView = Backbone.View.extend({
         this.showOpenFile();
         const lastOpenFile = this.model.fileInfos.getLast();
         if (lastOpenFile) {
+            this.views.open.currentSelectedIndex = 0;
             this.views.open.showOpenFileInfo(lastOpenFile);
         }
     },
 
-    launcherOpenFile: function(path) {
-        if (path && /\.kdbx$/i.test(path)) {
+    launcherOpenFile: function(file) {
+        if (file && file.data && /\.kdbx$/i.test(file.data)) {
             this.showOpenFile();
-            this.views.open.showOpenLocalFile(path);
+            this.views.open.showOpenLocalFile(file.data, file.key);
         }
     },
 
@@ -474,6 +480,19 @@ const AppView = Backbone.View.extend({
         }
     },
 
+    handleAutoSaveTimer: function () {
+        if (this.model.settings.get('autoSaveInterval') !== 0) {
+            // trigger periodical auto save
+            if (this.autoSaveTimeoutId) {
+                clearTimeout(this.autoSaveTimeoutId);
+            }
+            this.autoSaveTimeoutId = setTimeout(
+                this.saveAll.bind(this),
+                this.model.settings.get('autoSaveInterval') * 1000 * 60
+            );
+        }
+    },
+
     saveAndLock: function(complete) {
         let pendingCallbacks = 0;
         const errorFiles = [];
@@ -678,6 +697,7 @@ const AppView = Backbone.View.extend({
 
     dragover: function(e) {
         e.preventDefault();
+        e.originalEvent.dataTransfer.dropEffect = 'none';
     },
 
     drop: function(e) {

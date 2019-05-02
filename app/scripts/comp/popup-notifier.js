@@ -5,11 +5,16 @@ const AuthReceiver = require('./auth-receiver');
 const Links = require('../const/links');
 const Timeouts = require('../const/timeouts');
 const Locale = require('../util/locale');
+const Logger = require('../util/logger');
 
 const PopupNotifier = {
+    logger: null,
+
     init: function() {
+        this.logger = new Logger('popup-notifier');
+
         if (Launcher) {
-            window.open = this._openLauncherWindow;
+            window.open = this._openLauncherWindow.bind(this);
         } else {
             const windowOpen = window.open;
             window.open = function() {
@@ -46,27 +51,38 @@ const PopupNotifier = {
                 const parts = part.split('=');
                 settingsObj[parts[0].trim()] = parts[1].trim();
             });
-            if (settings.width) { opts.width = settings.width; }
-            if (settings.height) { opts.height = settings.height; }
-            if (settings.top) { opts.y = settings.top; }
-            if (settings.left) { opts.x = settings.left; }
+            if (settingsObj.width) { opts.width = +settingsObj.width; }
+            if (settingsObj.height) { opts.height = +settingsObj.height; }
+            if (settingsObj.top) { opts.y = +settingsObj.top; }
+            if (settingsObj.left) { opts.x = +settingsObj.left; }
         }
         let win = Launcher.openWindow(opts);
-        win.webContents.on('did-get-redirect-request', (e, fromUrl, toUrl) => {
-            if (PopupNotifier.isOwnUrl(toUrl)) {
+        win.webContents.on('will-redirect', (e, url) => {
+            if (PopupNotifier.isOwnUrl(url)) {
                 win.webContents.stop();
                 win.close();
-                PopupNotifier.processReturnToApp(toUrl);
+                PopupNotifier.processReturnToApp(url);
             }
         });
-        win.webContents.on('will-navigate', (e, toUrl) => {
-            if (PopupNotifier.isOwnUrl(toUrl)) {
+        win.webContents.on('will-navigate', (e, url) => {
+            if (PopupNotifier.isOwnUrl(url)) {
                 e.preventDefault();
                 win.close();
-                PopupNotifier.processReturnToApp(toUrl);
+                PopupNotifier.processReturnToApp(url);
             }
         });
-        win.loadURL(url);
+        win.webContents.on('crashed', (e, killed) => {
+            this.logger.debug('crashed', e, killed);
+            this.deferCheckClosed(win);
+            win.close();
+            win = null;
+        });
+        win.webContents.on('did-fail-load', (e, errorCode, errorDescription, validatedUrl, isMainFrame) => {
+            this.logger.debug('did-fail-load', e, errorCode, errorDescription, validatedUrl, isMainFrame);
+            this.deferCheckClosed(win);
+            win.close();
+            win = null;
+        });
         win.once('page-title-updated', () => {
             setTimeout(() => {
                 if (win) {
@@ -79,6 +95,7 @@ const PopupNotifier = {
             setTimeout(PopupNotifier.triggerClosed.bind(PopupNotifier, win), Timeouts.CheckWindowClosed);
             win = null;
         });
+        win.loadURL(url);
         Backbone.trigger('popup-opened', win);
         return win;
     },

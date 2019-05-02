@@ -1,7 +1,10 @@
 const StorageBase = require('./storage-base');
 const Locale = require('../util/locale');
 
-const GDriveClientId = '847548101761-koqkji474gp3i2gn3k5omipbfju7pbt1.apps.googleusercontent.com';
+const GDriveClientId = {
+    Local: '783608538594-36tkdh8iscrq8t8dq87gghubnhivhjp5.apps.googleusercontent.com',
+    Production: '847548101761-koqkji474gp3i2gn3k5omipbfju7pbt1.apps.googleusercontent.com'
+};
 const NewFileIdPrefix = 'NewFile:';
 
 const StorageGDrive = StorageBase.extend({
@@ -133,9 +136,9 @@ const StorageGDrive = StorageBase.extend({
             if (err) { return callback && callback(err); }
             this.logger.debug('List');
             let query = dir === 'shared' ? 'sharedWithMe=true'
-                : dir ? `parents="${dir}"` : 'parents="root"';
-            query += 'and trashed=false';
-            const url = this._baseUrl + '/files?fields={fields}&q={q}'
+                : dir ? `"${dir}" in parents` : '"root" in parents';
+            query += ' and trashed=false';
+            const url = this._baseUrl + '/files?fields={fields}&q={q}&pageSize=1000'
                 .replace('{fields}', encodeURIComponent('files(id,name,mimeType,headRevisionId)'))
                 .replace('{q}', encodeURIComponent(query));
             const ts = this.logger.ts();
@@ -200,7 +203,10 @@ const StorageGDrive = StorageBase.extend({
     },
 
     _getOAuthConfig: function() {
-        const clientId = this.appSettings.get('gdriveClientId') || GDriveClientId;
+        let clientId = this.appSettings.get('gdriveClientId');
+        if (!clientId) {
+            clientId = location.origin.indexOf('localhost') >= 0 ? GDriveClientId.Local : GDriveClientId.Production;
+        }
         return {
             scope: 'https://www.googleapis.com/auth/drive',
             url: 'https://accounts.google.com/o/oauth2/v2/auth',

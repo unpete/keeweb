@@ -6,6 +6,7 @@ const Locale = require('../../util/locale');
 const Alerts = require('../../comp/alerts');
 const FieldViewReadOnly = require('../fields/field-view-read-only');
 const FieldViewReadOnlyRaw = require('../fields/field-view-read-only-raw');
+const Copyable = require('../../mixins/copyable');
 
 const DetailsHistoryView = Backbone.View.extend({
     template: require('templates/details/details-history.hbs'),
@@ -106,6 +107,7 @@ const DetailsHistoryView = Backbone.View.extend({
         }
         this.fieldViews.forEach(function(fieldView) {
             fieldView.setElement(this.bodyEl).render();
+            fieldView.on('copy', this.fieldCopied.bind(this));
         }, this);
         const buttons = this.$el.find('.details__history-buttons');
         buttons.find('.details__history-button-revert').toggle(ix < this.history.length - 1);
@@ -180,8 +182,8 @@ const DetailsHistoryView = Backbone.View.extend({
 
     revertClick: function() {
         Alerts.yesno({
-            header: 'Revert to this history state?',
-            body: 'Your current state will be saved to history.',
+            header: Locale.detHistoryRevertAlert,
+            body: Locale.detHistoryRevertAlertBody,
             success: () => {
                 this.model.revertToHistoryState(this.record.entry);
                 this.closeHistory(true);
@@ -191,8 +193,8 @@ const DetailsHistoryView = Backbone.View.extend({
 
     deleteClick: function() {
         Alerts.yesno({
-            header: 'Delete this history state?',
-            body: 'You will not be able to restore it.',
+            header: Locale.detHistoryDeleteAlert,
+            body: Locale.detHistoryDeleteAlertBody,
             success: () => {
                 this.model.deleteHistory(this.record.entry);
                 this.render(this.activeIx);
@@ -202,8 +204,8 @@ const DetailsHistoryView = Backbone.View.extend({
 
     discardClick: function() {
         Alerts.yesno({
-            header: 'Discard changed made to entry?',
-            body: 'Unsaved changed will by lost, there will be no way back.',
+            header: Locale.detHistoryDiscardChangesAlert,
+            body: Locale.detHistoryDiscardChangesAlertBody,
             success: () => {
                 this.model.discardUnsaved();
                 this.closeHistory(true);
@@ -211,5 +213,7 @@ const DetailsHistoryView = Backbone.View.extend({
         });
     }
 });
+
+_.extend(DetailsHistoryView.prototype, Copyable);
 
 module.exports = DetailsHistoryView;

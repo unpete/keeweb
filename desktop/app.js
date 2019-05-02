@@ -1,16 +1,23 @@
 const electron = require('electron');
-const app = electron.app;
 const path = require('path');
 const fs = require('fs');
 
+const app = electron.app;
+
 let mainWindow = null;
 let appIcon = null;
-let openFile = process.argv.filter(arg => /\.kdbx$/i.test(arg))[0];
 let ready = false;
 let appReady = false;
 let restartPending = false;
 let mainWindowPosition = {};
 let updateMainWindowPositionTimeout = null;
+
+const gotTheLock = app.requestSingleInstanceLock();
+if (!gotTheLock) {
+    app.quit();
+}
+
+let openFile = process.argv.filter(arg => /\.kdbx$/i.test(arg))[0];
 const userDataDir = app.getPath('userData').replace(/[\\/]temp[\\/]\d+\.\d+[\\/]?$/, '');
 const windowPositionFileName = path.join(userDataDir, 'window-position.json');
 const appSettingsFileName = path.join(userDataDir, 'app-settings.json');
@@ -27,6 +34,7 @@ const showDevToolsOnStart = process.argv.some(arg => arg.startsWith('--devtools'
 app.setPath('userData', path.join(tempUserDataPath, tempUserDataPathRand));
 
 setEnv();
+restorePreferences();
 
 app.on('window-all-closed', () => {
     if (restartPending) {
@@ -35,6 +43,7 @@ app.on('window-all-closed', () => {
         app.removeAllListeners('ready');
         app.removeAllListeners('open-file');
         app.removeAllListeners('activate');
+        app.removeAllListeners('second-instance');
         electron.globalShortcut.unregisterAll();
         electron.powerMonitor.removeAllListeners('suspend');
         electron.powerMonitor.removeAllListeners('resume');
@@ -53,14 +62,13 @@ app.on('window-all-closed', () => {
     }
 });
 app.on('ready', () => {
-    if (!checkSingleInstance()) {
-        appReady = true;
-        setAppOptions();
-        createMainWindow();
-        setGlobalShortcuts();
-        subscribePowerEvents();
-        deleteOldTempFiles();
-    }
+    appReady = true;
+    setAppOptions();
+    createMainWindow();
+    setGlobalShortcuts();
+    subscribePowerEvents();
+    deleteOldTempFiles();
+    hookRequestHeaders();
 });
 app.on('open-file', (e, path) => {
     e.preventDefault();
@@ -77,6 +85,11 @@ app.on('activate', () => {
 app.on('will-quit', () => {
     electron.globalShortcut.unregisterAll();
 });
+app.on('second-instance', () => {
+    if (mainWindow) {
+        restoreMainWindow();
+    }
+});
 app.restartApp = function () {
     restartPending = true;
     mainWindow.close();
@@ -88,10 +101,18 @@ app.openWindow = function (opts) {
     return new electron.BrowserWindow(opts);
 };
 app.minimizeApp = function () {
-    if (process.platform !== 'darwin') {
-        mainWindow.minimize();
-        mainWindow.setSkipTaskbar(true);
-        appIcon = new electron.Tray(path.join(__dirname, 'icon.png'));
+    let imagePath;
+    mainWindow.hide();
+    if (process.platform === 'darwin') {
+        app.dock.hide();
+        imagePath = 'mac-menubar-icon.png';
+    } else {
+        imagePath = 'icon.png';
+    }
+    mainWindow.setSkipTaskbar(true);
+    if (!appIcon) {
+        const image = electron.nativeImage.createFromPath(path.join(__dirname, imagePath));
+        appIcon = new electron.Tray(image);
         appIcon.on('click', restoreMainWindow);
         const contextMenu = electron.Menu.buildFromTemplate([
             {label: 'Open KeeWeb', click: restoreMainWindow},
@@ -101,21 +122,16 @@ app.minimizeApp = function () {
         appIcon.setToolTip('KeeWeb');
     }
 };
+app.minimizeThenHideIfInTray = function () {
+    // This function is called when auto-type has displayed a selection list and a selection was made.
+    // To ensure focus returns to the previous window we must minimize first even if we're going to hide.
+    mainWindow.minimize();
+    if (appIcon) mainWindow.hide();
+};
 app.getMainWindow = function () {
     return mainWindow;
 };
 app.emitBackboneEvent = emitBackboneEvent;
-
-function checkSingleInstance() {
-    const shouldQuit = app.makeSingleInstance((/* commandLine, workingDirectory */) => {
-        restoreMainWindow();
-    });
-
-    if (shouldQuit) {
-        app.quit();
-    }
-    return shouldQuit;
-}
 
 function setAppOptions() {
     app.commandLine.appendSwitch('disable-background-timer-throttling');
@@ -131,32 +147,35 @@ function readAppSettings() {
 
 function createMainWindow() {
     const appSettings = readAppSettings();
-    mainWindow = new electron.BrowserWindow({
+    const windowOptions = {
         show: false,
         width: 1000, height: 700, minWidth: 700, minHeight: 400,
-        icon: path.join(__dirname, 'icon.png'),
         titleBarStyle: appSettings ? appSettings.titlebarStyle : undefined,
         backgroundColor: '#282C34',
         webPreferences: {
             backgroundThrottling: false
         }
-    });
+    };
+    if (process.platform !== 'win32') {
+        windowOptions.icon = path.join(__dirname, 'icon.png');
+    }
+    mainWindow = new electron.BrowserWindow(windowOptions);
     setMenu();
     mainWindow.loadURL(htmlPath);
     if (showDevToolsOnStart) {
-        mainWindow.openDevTools();
+        mainWindow.openDevTools({ mode: 'bottom' });
     }
     mainWindow.once('ready-to-show', () => {
-        setTimeout(() => {
-            mainWindow.show();
-            ready = true;
-            notifyOpenFile();
-        }, 50);
+        mainWindow.show();
+        ready = true;
+        notifyOpenFile();
     });
     mainWindow.webContents.on('context-menu', onContextMenu);
     mainWindow.on('resize', delaySaveMainWindowPosition);
     mainWindow.on('move', delaySaveMainWindowPosition);
+    mainWindow.on('restore', coerceMainWindowPositionToConnectedDisplay);
     mainWindow.on('close', updateMainWindowPositionIfPending);
+    mainWindow.on('focus', mainWindowFocus);
     mainWindow.on('blur', mainWindowBlur);
     mainWindow.on('closed', () => {
         mainWindow = null;
@@ -178,11 +197,16 @@ function createMainWindow() {
 }
 
 function restoreMainWindow() {
+    // if (process.platform === 'darwin') {
+    //     app.dock.show();
+    //     mainWindow.show();
+    // }
     if (mainWindow.isMinimized()) {
         mainWindow.restore();
     }
     mainWindow.setSkipTaskbar(false);
-    mainWindow.focus();
+    mainWindow.show();
+    coerceMainWindowPositionToConnectedDisplay();
     setTimeout(destroyAppIcon, 0);
 }
 
@@ -226,7 +250,6 @@ function updateMainWindowPosition() {
     }
     mainWindowPosition.maximized = mainWindow.isMaximized();
     mainWindowPosition.fullScreen = mainWindow.isFullScreen();
-    mainWindowPosition.displayBounds = require('electron').screen.getDisplayMatching(bounds).bounds;
     mainWindowPosition.changed = true;
 }
 
@@ -246,12 +269,8 @@ function restoreMainWindowPosition() {
             mainWindowPosition = JSON.parse(data);
             if (mainWindow && mainWindowPosition) {
                 if (mainWindowPosition.width && mainWindowPosition.height) {
-                    const displayBounds = require('electron').screen.getDisplayMatching(mainWindowPosition).bounds;
-                    const db = mainWindowPosition.displayBounds;
-                    if (displayBounds.x === db.x && displayBounds.y === db.y &&
-                        displayBounds.width === db.width && displayBounds.height === db.height) {
-                        mainWindow.setBounds(mainWindowPosition);
-                    }
+                    mainWindow.setBounds(mainWindowPosition);
+                    coerceMainWindowPositionToConnectedDisplay();
                 }
                 if (mainWindowPosition.maximized) { mainWindow.maximize(); }
                 if (mainWindowPosition.fullScreen) { mainWindow.setFullScreen(true); }
@@ -262,6 +281,10 @@ function restoreMainWindowPosition() {
 
 function mainWindowBlur() {
     emitBackboneEvent('main-window-blur');
+}
+
+function mainWindowFocus() {
+    emitBackboneEvent('main-window-focus');
 }
 
 function emitBackboneEvent(e, arg) {
@@ -304,7 +327,8 @@ function setMenu() {
             {
                 label: 'Window',
                 submenu: [
-                    { accelerator: 'CmdOrCtrl+M', role: 'minimize' }
+                    { accelerator: 'CmdOrCtrl+M', role: 'minimize' },
+                    { accelerator: 'Command+W', role: 'close' }
                 ]
             }
         ];
@@ -333,9 +357,10 @@ function onContextMenu(e, props) {
 
 function notifyOpenFile() {
     if (ready && openFile && mainWindow) {
-        openFile = openFile.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-        mainWindow.webContents.executeJavaScript('if (window.launcherOpen) { window.launcherOpen("' + openFile + '"); } ' +
-            ' else { window.launcherOpenedFile="' + openFile + '"; }');
+        const openKeyfile = process.argv.filter(arg => arg.startsWith('--keyfile=')).map(arg => arg.replace('--keyfile=', ''))[0];
+        const fileInfo = JSON.stringify({ data: openFile, key: openKeyfile });
+        mainWindow.webContents.executeJavaScript('if (window.launcherOpen) { window.launcherOpen(' + fileInfo + '); } ' +
+            ' else { window.launcherOpenedFile=' + fileInfo + '; }');
         openFile = null;
     }
 }
@@ -381,6 +406,28 @@ function setEnv() {
     }
 }
 
+function restorePreferences() {
+    const profileConfigPath = path.join(userDataDir, 'profile.json');
+
+    const newProfile = { dir: tempUserDataPathRand };
+    let oldProfile;
+    try {
+        oldProfile = JSON.parse(fs.readFileSync(profileConfigPath, 'utf8'));
+    } catch (e) { }
+
+    fs.writeFileSync(profileConfigPath, JSON.stringify(newProfile));
+
+    if (oldProfile && oldProfile.dir && /^[\d.]+$/.test(oldProfile.dir)) {
+        const oldProfilePath = path.join(tempUserDataPath, oldProfile.dir);
+        const newProfilePath = path.join(tempUserDataPath, newProfile.dir);
+        if (fs.existsSync(path.join(oldProfilePath, 'Cookies'))) {
+            fs.mkdirSync(newProfilePath);
+            fs.renameSync(path.join(oldProfilePath, 'Cookies'),
+                path.join(newProfilePath, 'Cookies'));
+        }
+    }
+}
+
 function deleteOldTempFiles() {
     if (app.oldTempFilesDeleted) {
         return;
@@ -407,4 +454,56 @@ function deleteRecursive(dir) {
         }
     }
     fs.rmdirSync(dir);
+}
+
+// When sending a PUT XMLHttpRequest Chromium includes the header "Origin: file://".
+// This confuses some WebDAV clients, notably OwnCloud.
+// The header is invalid, so removing it everywhere it occurs should do no harm.
+
+function hookRequestHeaders() {
+    electron.session.defaultSession.webRequest.onBeforeSendHeaders((details, callback) => {
+        if (!details.url.startsWith('ws:')) {
+            delete details.requestHeaders['Origin'];
+        }
+        callback({cancel: false, requestHeaders: details.requestHeaders});
+    });
+}
+
+// If a display is disconnected while KeeWeb is minimized, Electron does not
+// ensure that the restored window appears on a display that is still connected.
+// This checks to be sure the title bar is somewhere the user can grab it,
+// without making it impossible to minimize and restore a window keeping it
+// partially off-screen or straddling two displays if the user desires that.
+
+function coerceMainWindowPositionToConnectedDisplay() {
+    const eScreen = electron.screen;
+    const displays = eScreen.getAllDisplays();
+    if (!displays || !displays.length) return;
+    const windowBounds = mainWindow.getBounds();
+    const contentBounds = mainWindow.getContentBounds();
+    const tbLeft = windowBounds.x;
+    const tbRight = windowBounds.x + windowBounds.width;
+    const tbTop = windowBounds.y;
+    const tbBottom = contentBounds.y;
+    // 160px width and 2/3s the title bar height should be enough that the user can grab it
+    for (let i = 0; i < displays.length; ++i) {
+        const workArea = displays[i].workArea;
+        const overlapWidth = Math.min(tbRight, workArea.x + workArea.width) - Math.max(tbLeft, workArea.x);
+        const overlapHeight = Math.min(tbBottom, workArea.y + workArea.height) - Math.max(tbTop, workArea.y);
+        if (overlapWidth >= 160 && 3 * overlapHeight >= 2 * (tbBottom - tbTop)) return;
+    }
+    // If we get here, no display contains a big enough strip of the title bar
+    // that we can be confident the user can drag it into visibility.  Rather than
+    // attempt to guess what the user wants, just center it on the primary display.
+    // Try to keep the previous height and width, but clamp each to 90% of the workarea.
+    const workArea = eScreen.getPrimaryDisplay().workArea;
+    const newWidth = Math.min(windowBounds.width, Math.floor(0.9 * workArea.width));
+    const newHeight = Math.min(windowBounds.height, Math.floor(0.9 * workArea.height));
+    mainWindow.setBounds({
+        'x': workArea.x + Math.floor((workArea.width - newWidth) / 2),
+        'y': workArea.y + Math.floor((workArea.height - newHeight) / 2),
+        'width': newWidth,
+        'height': newHeight
+    });
+    updateMainWindowPosition();
 }

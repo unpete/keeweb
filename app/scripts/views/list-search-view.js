@@ -43,7 +43,8 @@ const ListSearchView = Backbone.View.extend({
             { value: '-created', icon: 'sort-numeric-desc', loc: () => Locale.searchCreated + ' ' + this.addArrow(Locale.searchNO) },
             { value: 'updated', icon: 'sort-numeric-asc', loc: () => Locale.searchUpdated + ' ' + this.addArrow(Locale.searchON) },
             { value: '-updated', icon: 'sort-numeric-desc', loc: () => Locale.searchUpdated + ' ' + this.addArrow(Locale.searchNO) },
-            { value: '-attachments', icon: 'sort-amount-desc', loc: () => Locale.searchAttachments }
+            { value: '-attachments', icon: 'sort-amount-desc', loc: () => Locale.searchAttachments },
+            { value: '-rank', icon: 'sort-numeric-desc', loc: () => Locale.searchRank }
         ];
         this.sortIcons = {};
         this.sortOptions.forEach(function(opt) {
@@ -55,8 +56,12 @@ const ListSearchView = Backbone.View.extend({
             url: true, protect: false,
             notes: true, pass: false,
             cs: false, regex: false,
-            history: false, title: true
+            history: false, title: true,
+            rank: true
         };
+        if (this.model.advancedSearch) {
+            this.advancedSearch = _.extend({}, this.model.advancedSearch);
+        }
         this.setLocale();
         KeyHandler.onKey(Keys.DOM_VK_F, this.findKeyPress, this, KeyHandler.SHORTCUT_ACTION);
         KeyHandler.onKey(Keys.DOM_VK_N, this.newKeyPress, this, KeyHandler.SHORTCUT_OPT);
@@ -199,7 +204,10 @@ const ListSearchView = Backbone.View.extend({
         }
         const sortIconCls = this.sortIcons[filter.sort] || 'sort';
         this.$el.find('.list__search-btn-sort>i').attr('class', 'fa fa-' + sortIconCls);
-        const adv = !!filter.filter.advanced;
+        let adv = !!filter.filter.advanced;
+        if (this.model.advancedSearch) {
+            adv = filter.filter.advanced !== this.model.advancedSearch;
+        }
         if (this.advancedSearchEnabled !== adv) {
             this.advancedSearchEnabled = adv;
             this.$el.find('.list__search-adv').toggleClass('hide', !this.advancedSearchEnabled);
@@ -224,7 +232,13 @@ const ListSearchView = Backbone.View.extend({
     advancedSearchClick: function() {
         this.advancedSearchEnabled = !this.advancedSearchEnabled;
         this.$el.find('.list__search-adv').toggleClass('hide', !this.advancedSearchEnabled);
-        Backbone.trigger('add-filter', { advanced: this.advancedSearchEnabled ? this.advancedSearch : false });
+        let advanced = false;
+        if (this.advancedSearchEnabled) {
+            advanced = this.advancedSearch;
+        } else if (this.model.advancedSearch) {
+            advanced = this.model.advancedSearch;
+        }
+        Backbone.trigger('add-filter', { advanced });
     },
 
     toggleMenu: function() {

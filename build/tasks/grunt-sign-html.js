@@ -6,7 +6,7 @@ module.exports = function (grunt) {
         }
         const done = this.async();
         const fs = require('fs');
-        const sign = require('../lib/sign');
+        const sign = require('../util/sign');
         const data = fs.readFileSync(this.options().file);
         let fileStr = data.toString();
         const marker = '<meta name="kw-signature" content="';
@@ -26,6 +26,7 @@ module.exports = function (grunt) {
             } else {
                 grunt.warn('Sign error: ' + e);
             }
+            done(false);
         });
     });
 };

@@ -1,134 +1,31 @@
 /* eslint-env node */
 
 const fs = require('fs');
-const path = require('path');
 
-const StringReplacePlugin = require('string-replace-webpack-plugin');
-const StatsPlugin = require('stats-webpack-plugin');
+const sass = require('node-sass');
+
+const webpackConfig = require('./webpack.config');
+const postCssReplaceFont = require('./build/util/postcss-replace-font');
+const pkg = require('./package.json');
 
 module.exports = function(grunt) {
     require('time-grunt')(grunt);
     require('load-grunt-tasks')(grunt);
-    grunt.loadTasks('grunt/tasks');
 
-    const webpack = require('webpack');
-    const pkg = require('./package.json');
-    const dt = new Date().toISOString().replace(/T.*/, '');
-    const minElectronVersionForUpdate = '1.7.0';
+    grunt.loadTasks('build/tasks');
+
+    require('./grunt.tasks')(grunt);
+    require('./grunt.entrypoints')(grunt);
+
+    const date = new Date();
+    grunt.config.set('date', date);
+
+    const dt = date.toISOString().replace(/T.*/, '');
+    const year = date.getFullYear();
+    const minElectronVersionForUpdate = '4.0.1';
     const zipCommentPlaceholderPart = 'zip_comment_placeholder_that_will_be_replaced_with_hash';
     const zipCommentPlaceholder = zipCommentPlaceholderPart + '.'.repeat(512 - zipCommentPlaceholderPart.length);
-    const electronVersion = pkg.devDependencies['electron'].replace(/^\D/, '');
-    const year = new Date().getFullYear();
-
-    function replaceFont(css) {
-        css.walkAtRules('font-face', rule => {
-            const fontFamily = rule.nodes.filter(n => n.prop === 'font-family')[0];
-            if (!fontFamily) {
-                throw 'Bad font rule: ' + rule.toString();
-            }
-            const value = fontFamily.value.replace(/["']/g, '');
-            const fontFiles = {
-                FontAwesome: 'fontawesome-webfont.woff'
-            };
-            const fontFile = fontFiles[value];
-            if (!fontFile) {
-                throw 'Unsupported font ' + value + ': ' + rule.toString();
-            }
-            const data = fs.readFileSync('tmp/fonts/' + fontFile, 'base64');
-            const src = 'url(data:application/font-woff;charset=utf-8;base64,{data}) format(\'woff\')'
-                .replace('{data}', data);
-            rule.nodes = rule.nodes.filter(n => n.prop !== 'src');
-            rule.append({ prop: 'src', value: src });
-        });
-    }
-
-    const webpackConfig = {
-        entry: {
-            app: 'app',
-            vendor: ['jquery', 'underscore', 'backbone', 'kdbxweb', 'baron', 'pikaday', 'filesaver', 'qrcode',
-                'argon2-asm', 'argon2-wasm', 'argon2']
-        },
-        output: {
-            path: path.resolve('.', 'tmp/js'),
-            filename: 'app.js'
-        },
-        stats: {
-            colors: false,
-            modules: true,
-            reasons: true
-        },
-        progress: false,
-        failOnError: true,
-        resolve: {
-            modules: [path.join(__dirname, 'app/scripts'), path.join(__dirname, 'bower_components')],
-            alias: {
-                backbone: 'backbone/backbone-min.js',
-                underscore: 'underscore/underscore-min.js',
-                _: 'underscore/underscore-min.js',
-                jquery: 'jquery/dist/jquery.min.js',
-                hbs: path.resolve(__dirname, 'node_modules', 'handlebars/runtime.js'),
-                kdbxweb: 'kdbxweb/dist/kdbxweb.js',
-                baron: 'baron/baron.min.js',
-                pikaday: 'pikaday/pikaday.js',
-                filesaver: 'FileSaver.js/FileSaver.min.js',
-                qrcode: 'jsqrcode/dist/qrcode.min.js',
-                'argon2-asm': 'argon2-browser/docs/dist/argon2-asm.min.js',
-                'argon2-wasm': 'argon2-browser/docs/dist/argon2.wasm',
-                'argon2': 'argon2-browser/docs/dist/argon2.min.js',
-                templates: path.join(__dirname, 'app/templates')
-            }
-        },
-        module: {
-            loaders: [
-                { test: /\.hbs$/, loader: StringReplacePlugin.replace('handlebars-loader', { replacements: [{
-                    pattern: /\r?\n\s*/g,
-                    replacement: function() { return '\n'; }
-                }]})},
-                { test: /runtime-info\.js$/, loader: StringReplacePlugin.replace({ replacements: [
-                    { pattern: /@@VERSION/g, replacement: function() { return pkg.version; } },
-                    { pattern: /@@DATE/g, replacement: function() { return dt; } },
-                    { pattern: /@@COMMIT/g, replacement: function() { return grunt.config.get('gitinfo.local.branch.current.shortSHA'); } }
-                ]})},
-                { test: /baron(\.min)?\.js$/, loader: 'exports-loader?baron; delete window.baron;' },
-                { test: /pikaday\.js$/, loader: 'uglify-loader' },
-                { test: /handlebars/, loader: 'strip-sourcemap-loader' },
-                { test: /\.js$/, exclude: /(node_modules|bower_components)/, loader: 'babel-loader',
-                    query: { presets: ['es2015'], cacheDirectory: true }
-                },
-                { test: /\.json$/, loader: 'json-loader' },
-                { test: /argon2-asm\.min\.js$/, loader: 'raw-loader' },
-                { test: /argon2\.wasm$/, loader: 'base64-loader' },
-                { test: /argon2\.min\.js/, loader: 'raw-loader' },
-                { test: /\.scss$/, loader: 'raw-loader' }
-            ]
-        },
-        plugins: [
-            new webpack.optimize.CommonsChunkPlugin({ name: 'vendor', minChunks: Infinity, filename: 'vendor.js' }),
-            new webpack.BannerPlugin('keeweb v' + pkg.version + ', (c) ' + year + ' ' + pkg.author.name +
-                ', opensource.org/licenses/' + pkg.license),
-            new webpack.ProvidePlugin({ _: 'underscore', $: 'jquery' }),
-            new webpack.IgnorePlugin(/^(moment)$/),
-            new StringReplacePlugin(),
-            new StatsPlugin('stats.json', { chunkModules: true })
-        ],
-        node: {
-            console: false,
-            process: false,
-            crypto: false,
-            Buffer: false,
-            __filename: false,
-            __dirname: false,
-            fs: false,
-            setImmediate: false,
-            path: false
-        },
-        externals: {
-            xmldom: 'null',
-            crypto: 'null',
-            fs: 'null',
-            path: 'null'
-        }
-    };
+    const electronVersion = pkg.dependencies.electron.replace(/^\D/, '');
 
     grunt.initConfig({
         gitinfo: {
@@ -139,10 +36,6 @@ module.exports = function(grunt) {
                     name: 'Current branch name',
                     lastCommitTime: 'Last commit time'
                 }
-            }
-        },
-        'bower-install-simple': {
-            install: {
             }
         },
         clean: {
@@ -175,8 +68,22 @@ module.exports = function(grunt) {
                 expand: true,
                 nonull: true
             },
+            manifest: {
+                cwd: 'app/manifest/',
+                src: ['*.json', '*.xml'],
+                dest: 'tmp/',
+                expand: true,
+                nonull: true
+            },
+            'dist-manifest': {
+                cwd: 'app/manifest/',
+                src: ['*.json', '*.xml'],
+                dest: 'dist/',
+                expand: true,
+                nonull: true
+            },
             fonts: {
-                src: 'bower_components/font-awesome/fonts/fontawesome-webfont.*',
+                src: 'node_modules/font-awesome/fonts/fontawesome-webfont.*',
                 dest: 'tmp/fonts/',
                 nonull: true,
                 expand: true,
@@ -244,7 +151,8 @@ module.exports = function(grunt) {
         sass: {
             options: {
                 sourceMap: false,
-                includePaths: ['./bower_components']
+                includePaths: ['./node_modules'],
+                implementation: sass
             },
             dist: {
                 files: {
@@ -255,7 +163,7 @@ module.exports = function(grunt) {
         postcss: {
             options: {
                 processors: [
-                    replaceFont,
+                    postCssReplaceFont,
                     require('cssnano')({discardComments: {removeAll: true}})
                 ]
             },
@@ -300,7 +208,7 @@ module.exports = function(grunt) {
                 files: { 'tmp/desktop/app/index.html': 'dist/index.html' }
             },
             'desktop-public-key': {
-                options: { replacements: [{ pattern: '\'PUBLIC_KEY_CONTENT\'', replacement:
+                options: { replacements: [{ pattern: '\'@@PUBLIC_KEY_CONTENT\'', replacement:
                     '`' + fs.readFileSync('app/resources/public-key.pem', {encoding: 'utf8'}).trim() + '`' }] },
                 files: { 'tmp/desktop/app/main.js': 'desktop/main.js' }
             },
@@ -310,19 +218,16 @@ module.exports = function(grunt) {
             }
         },
         webpack: {
-            js: webpackConfig
+            js: webpackConfig.config(grunt)
         },
         'webpack-dev-server': {
             options: {
-                webpack: webpackConfig,
+                webpack: webpackConfig.devServerConfig(grunt),
                 publicPath: '/tmp/js',
                 progress: false
             },
             js: {
                 keepalive: true,
-                webpack: {
-                    devtool: 'source-map'
-                },
                 port: 8085
             }
         },
@@ -517,7 +422,7 @@ module.exports = function(grunt) {
                         pkgName: `KeeWeb-${pkg.version}.linux.x64.deb`,
                         targetDir: 'dist/desktop',
                         appName: 'KeeWeb',
-                        depends: 'libappindicator1, libgconf2-4',
+                        depends: 'libappindicator1, libgconf-2-4',
                         scripts: {
                             postinst: 'package/deb/scripts/postinst'
                         }
@@ -536,7 +441,7 @@ module.exports = function(grunt) {
                         pkgName: `KeeWeb-${pkg.version}.linux.ia32.deb`,
                         targetDir: 'dist/desktop',
                         appName: 'KeeWeb',
-                        depends: 'libappindicator1, libgconf2-4',
+                        depends: 'libappindicator1, libgconf-2-4',
                         scripts: {
                             postinst: 'package/deb/scripts/postinst'
                         }
@@ -600,7 +505,7 @@ module.exports = function(grunt) {
                         'tmp/desktop/KeeWeb-win32-x64/ffmpeg.dll': '',
                         'tmp/desktop/KeeWeb-win32-x64/libEGL.dll': 'ANGLE libEGL Dynamic Link Library',
                         'tmp/desktop/KeeWeb-win32-x64/libGLESv2.dll': 'ANGLE libGLESv2 Dynamic Link Library',
-                        'tmp/desktop/KeeWeb-win32-x64/node.dll': 'Node.js'
+                        'tmp/desktop/KeeWeb-win32-x64/osmesa.dll': ''
                     }
                 }
             },
@@ -611,7 +516,7 @@ module.exports = function(grunt) {
                         'tmp/desktop/KeeWeb-win32-ia32/ffmpeg.dll': '',
                         'tmp/desktop/KeeWeb-win32-ia32/libEGL.dll': 'ANGLE libEGL Dynamic Link Library',
                         'tmp/desktop/KeeWeb-win32-ia32/libGLESv2.dll': 'ANGLE libGLESv2 Dynamic Link Library',
-                        'tmp/desktop/KeeWeb-win32-ia32/node.dll': 'Node.js'
+                        'tmp/desktop/KeeWeb-win32-ia32/osmesa.dll': ''
                     }
                 }
             },
@@ -664,135 +569,4 @@ module.exports = function(grunt) {
             }
         }
     });
-
-    // compound builder tasks
-
-    grunt.registerTask('build-web-app', [
-        'gitinfo',
-        'bower-install-simple',
-        'clean',
-        'eslint',
-        'copy:html',
-        'copy:favicon',
-        'copy:icons',
-        'copy:fonts',
-        'webpack',
-        'uglify',
-        'sass',
-        'postcss',
-        'inline',
-        'htmlmin',
-        'string-replace:manifest-html',
-        'string-replace:manifest',
-        'copy:dist-icons',
-        'sign-html'
-    ]);
-
-    grunt.registerTask('build-desktop-app-content', [
-        'copy:desktop-app-content',
-        'string-replace:desktop-public-key',
-        'string-replace:desktop-html'
-    ]);
-
-    grunt.registerTask('build-desktop-update', [
-        'copy:desktop-update',
-        'copy:desktop-update-helper',
-        'sign-desktop-files:desktop-update',
-        'compress:desktop-update',
-        'sign-archive:desktop-update',
-        'validate-desktop-update'
-    ]);
-
-    grunt.registerTask('build-desktop-executables', [
-        'electron',
-        'sign-exe:win32-build-x64',
-        'sign-exe:win32-build-ia32',
-        'copy:desktop-darwin-helper-x64',
-        'copy:desktop-darwin-installer',
-        'copy:desktop-windows-helper-ia32',
-        'copy:desktop-windows-helper-x64',
-        'codesign:app'
-    ]);
-
-    grunt.registerTask('build-desktop-archives', [
-        'compress:win32-x64',
-        'compress:win32-ia32',
-        'compress:linux-x64',
-        'compress:linux-ia32'
-    ]);
-
-    grunt.registerTask('build-desktop-dist-darwin', [
-        'appdmg',
-        'codesign:dmg'
-    ]);
-
-    grunt.registerTask('build-desktop-dist-win32', [
-        'nsis:win32-un-x64',
-        'nsis:win32-un-ia32',
-        'sign-exe:win32-uninst-x64',
-        'sign-exe:win32-uninst-ia32',
-        'nsis:win32-x64',
-        'nsis:win32-ia32',
-        'sign-exe:win32-installer-x64',
-        'sign-exe:win32-installer-ia32',
-        'copy:desktop-win32-dist-x64',
-        'copy:desktop-win32-dist-ia32'
-    ]);
-
-    grunt.registerTask('build-desktop-dist-linux', [
-        'deb:linux-x64',
-        'deb:linux-ia32'
-    ]);
-
-    grunt.registerTask('build-desktop-dist', [
-        'build-desktop-dist-darwin',
-        'build-desktop-dist-win32',
-        'build-desktop-dist-linux'
-    ]);
-
-    grunt.registerTask('build-desktop', [
-        'gitinfo',
-        'clean:desktop',
-        'build-desktop-app-content',
-        'build-desktop-executables',
-        'build-desktop-update',
-        'build-desktop-archives',
-        'build-desktop-dist',
-        'sign-dist'
-    ]);
-
-    grunt.registerTask('build-cordova-app-content', [
-        'string-replace:cordova-html'
-    ]);
-
-    grunt.registerTask('build-cordova', [
-        'gitinfo',
-        'clean:cordova',
-        'build-cordova-app-content'
-    ]);
-
-    // entry point tasks
-
-    grunt.registerTask('default', 'Default: build web app', [
-        'build-web-app'
-    ]);
-
-    grunt.registerTask('dev', 'Build project and start web server and watcher', [
-        'build-web-app',
-        'devsrv'
-    ]);
-
-    grunt.registerTask('devsrv', 'Start web server and watcher', [
-        'concurrent:dev-server'
-    ]);
-
-    grunt.registerTask('desktop', 'Build web and desktop apps for all platforms', [
-        'default',
-        'build-desktop'
-    ]);
-
-    grunt.registerTask('cordova', 'Build cordova app', [
-        'default',
-        'build-cordova'
-    ]);
 };

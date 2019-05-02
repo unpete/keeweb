@@ -23,13 +23,14 @@ const Keys = require('../../const/keys');
 const KeyHandler = require('../../comp/key-handler');
 const Alerts = require('../../comp/alerts');
 const CopyPaste = require('../../comp/copy-paste');
-const OtpQrReqder = require('../../comp/otp-qr-reader');
+const OtpQrReader = require('../../comp/otp-qr-reader');
 const AutoType = require('../../auto-type');
 const Format = require('../../util/format');
 const Locale = require('../../util/locale');
 const Tip = require('../../util/tip');
+const FileSaver = require('../../util/file-saver');
 const Timeouts = require('../../const/timeouts');
-const FileSaver = require('filesaver');
+const Copyable = require('../../mixins/copyable');
 
 const DetailsView = Backbone.View.extend({
     template: require('templates/details/details.hbs'),
@@ -71,12 +72,14 @@ const DetailsView = Backbone.View.extend({
         this.listenTo(Backbone, 'toggle-settings', this.settingsToggled);
         this.listenTo(Backbone, 'context-menu-select', this.contextMenuSelect);
         this.listenTo(Backbone, 'set-locale', this.render);
-        this.listenTo(OtpQrReqder, 'qr-read', this.otpCodeRead);
-        this.listenTo(OtpQrReqder, 'enter-manually', this.otpEnterManually);
-        KeyHandler.onKey(Keys.DOM_VK_C, this.copyPassword, this, KeyHandler.SHORTCUT_ACTION, false, true);
-        KeyHandler.onKey(Keys.DOM_VK_B, this.copyUserName, this, KeyHandler.SHORTCUT_ACTION, false, true);
-        KeyHandler.onKey(Keys.DOM_VK_U, this.copyUrl, this, KeyHandler.SHORTCUT_ACTION, false, true);
-        KeyHandler.onKey(Keys.DOM_VK_T, this.autoType, this, KeyHandler.SHORTCUT_ACTION);
+        this.listenTo(OtpQrReader, 'qr-read', this.otpCodeRead);
+        this.listenTo(OtpQrReader, 'enter-manually', this.otpEnterManually);
+        KeyHandler.onKey(Keys.DOM_VK_C, this.copyPassword, this, KeyHandler.SHORTCUT_ACTION);
+        KeyHandler.onKey(Keys.DOM_VK_B, this.copyUserName, this, KeyHandler.SHORTCUT_ACTION);
+        KeyHandler.onKey(Keys.DOM_VK_U, this.copyUrl, this, KeyHandler.SHORTCUT_ACTION);
+        if (AutoType.enabled) {
+            KeyHandler.onKey(Keys.DOM_VK_T, this.autoType, this, KeyHandler.SHORTCUT_ACTION);
+        }
         KeyHandler.onKey(Keys.DOM_VK_DELETE, this.deleteKeyPress, this, KeyHandler.SHORTCUT_ACTION, false, true);
         KeyHandler.onKey(Keys.DOM_VK_BACK_SPACE, this.deleteKeyPress, this, KeyHandler.SHORTCUT_ACTION, false, true);
     },
@@ -449,13 +452,6 @@ const DetailsView = Backbone.View.extend({
         setTimeout(() => { tip.hide(); }, Timeouts.AutoHideHint);
     },
 
-    hideFieldCopyTip: function() {
-        if (this.fieldCopyTip) {
-            this.fieldCopyTip.hide();
-            this.fieldCopyTip = null;
-        }
-    },
-
     settingsToggled: function() {
         this.hideFieldCopyTip();
     },
@@ -537,33 +533,15 @@ const DetailsView = Backbone.View.extend({
         return true;
     },
 
-    fieldCopied: function(e) {
-        this.hideFieldCopyTip();
-        const fieldLabel = e.source.labelEl;
-        const clipboardTime = e.copyRes.seconds;
-        const msg = clipboardTime ? Locale.detFieldCopiedTime.replace('{}', clipboardTime)
-            : Locale.detFieldCopied;
-        let tip;
-        if (!this.isHidden()) {
-            tip = Tip.createTip(fieldLabel[0], {title: msg, placement: 'right', fast: true, force: true, noInit: true});
-            this.fieldCopyTip = tip;
-            tip.show();
-        }
-        setTimeout(() => {
-            if (tip) {
-                tip.hide();
-            }
-            this.fieldCopyTip = null;
-            if (e.source.model.name === '$Password' && AppSettingsModel.instance.get('lockOnCopy')) {
-                setTimeout(() => {
-                    Backbone.trigger('lock-workspace');
-                }, Timeouts.BeforeAutoLock);
-            }
-        }, Timeouts.CopyTip);
-    },
-
     dragover: function(e) {
         e.preventDefault();
+        e.stopPropagation();
+        const dt = e.originalEvent.dataTransfer;
+        if (!dt.types || (dt.types.indexOf ? dt.types.indexOf('Files') === -1 : !dt.types.contains('Files'))) {
+            dt.dropEffect = 'none';
+            return;
+        }
+        dt.dropEffect = 'copy';
         if (this.dragTimeout) {
             clearTimeout(this.dragTimeout);
         }
@@ -798,7 +776,7 @@ const DetailsView = Backbone.View.extend({
     },
 
     setupOtp: function() {
-        OtpQrReqder.read();
+        OtpQrReader.read();
     },
 
     otpCodeRead: function(otp) {
@@ -844,5 +822,6 @@ const DetailsView = Backbone.View.extend({
 });
 
 _.extend(DetailsView.prototype, Scrollable);
+_.extend(DetailsView.prototype, Copyable);
 
 module.exports = DetailsView;

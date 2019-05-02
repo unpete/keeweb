@@ -1,3 +1,4 @@
+const Backbone = require('backbone');
 const AppModel = require('./models/app-model');
 const AppView = require('./views/app-view');
 const AppSettingsModel = require('./models/app-settings-model');
@@ -9,7 +10,6 @@ const IdleTracker = require('./comp/idle-tracker');
 const PopupNotifier = require('./comp/popup-notifier');
 const SingleInstanceChecker = require('./comp/single-instance-checker');
 const AppRightsChecker = require('./comp/app-rights-checker');
-const CookieManager = require('./comp/cookie-manager');
 const Alerts = require('./comp/alerts');
 const Updater = require('./comp/updater');
 const AuthReceiver = require('./comp/auth-receiver');
@@ -17,6 +17,8 @@ const ExportApi = require('./comp/export-api');
 const SettingsManager = require('./comp/settings-manager');
 const PluginManager = require('./plugins/plugin-manager');
 const Launcher = require('./comp/launcher');
+const FeatureTester = require('./comp/feature-tester');
+const FocusDetector = require('./comp/focus-detector');
 const Timeouts = require('./const/timeouts');
 const FeatureDetector = require('./util/feature-detector');
 const KdbxwebInit = require('./util/kdbxweb-init');
@@ -25,7 +27,7 @@ const Locale = require('./util/locale');
 const ready = Launcher && Launcher.ready || $;
 
 ready(() => {
-    if (FeatureDetector.isPopup && AuthReceiver.receive() || FeatureDetector.isFrame) {
+    if (AuthReceiver.receive() || FeatureDetector.isFrame) {
         return;
     }
     loadMixins();
@@ -49,16 +51,15 @@ ready(() => {
     }
 
     function ensureCanRun() {
-        return Promise.resolve()
-            .then(() => FeatureDetector.ensureCanRun())
+        return FeatureTester.test()
             .catch(e => {
                 Alerts.error({
                     header: Locale.appSettingsError,
-                    body: Locale.appNotSupportedError,
+                    body: Locale.appNotSupportedError + '<br/><br/>' + e,
                     buttons: [],
                     esc: false, enter: false, click: false
                 });
-                throw e;
+                throw 'Feature testing failed: ' + e;
             });
     }
 
@@ -76,6 +77,7 @@ ready(() => {
         IdleTracker.init();
         PopupNotifier.init();
         KdbxwebInit.init();
+        FocusDetector.init();
         window.kw = ExportApi;
         return PluginManager.init();
     }
@@ -107,41 +109,42 @@ ready(() => {
     }
 
     function showApp() {
-        return Promise.resolve().then(() => {
-            const skipHttpsWarning = localStorage.skipHttpsWarning || appModel.settings.get('skipHttpsWarning');
-            const protocolIsInsecure = ['https:', 'file:', 'app:'].indexOf(location.protocol) < 0;
-            const hostIsInsecure = location.hostname !== 'localhost';
-            if (protocolIsInsecure && hostIsInsecure && !skipHttpsWarning) {
-                return new Promise(resolve => {
-                    Alerts.error({
-                        header: Locale.appSecWarn, icon: 'user-secret', esc: false, enter: false, click: false,
-                        body: Locale.appSecWarnBody1 + '<br/><br/>' + Locale.appSecWarnBody2,
-                        buttons: [
-                            {result: '', title: Locale.appSecWarnBtn, error: true}
-                        ],
-                        complete: () => {
-                            showView();
-                            resolve();
-                        }
+        return Promise.resolve()
+            .then(() => {
+                const skipHttpsWarning = localStorage.skipHttpsWarning || appModel.settings.get('skipHttpsWarning');
+                const protocolIsInsecure = ['https:', 'file:', 'app:'].indexOf(location.protocol) < 0;
+                const hostIsInsecure = location.hostname !== 'localhost';
+                if (protocolIsInsecure && hostIsInsecure && !skipHttpsWarning) {
+                    return new Promise(resolve => {
+                        Alerts.error({
+                            header: Locale.appSecWarn, icon: 'user-secret', esc: false, enter: false, click: false,
+                            body: Locale.appSecWarnBody1 + '<br/><br/>' + Locale.appSecWarnBody2,
+                            buttons: [
+                                {result: '', title: Locale.appSecWarnBtn, error: true}
+                            ],
+                            complete: () => {
+                                showView();
+                                resolve();
+                            }
+                        });
                     });
-                });
-            } else {
-                showView();
-            }
-        });
+                } else {
+                    showView();
+                }
+            });
     }
 
     function postInit() {
         Updater.init();
         SingleInstanceChecker.init();
         AppRightsChecker.init();
-        CookieManager.init();
         setTimeout(() => PluginManager.runAutoUpdate(), Timeouts.AutoUpdatePluginsAfterStart);
     }
 
     function showView() {
         appModel.prepare();
         new AppView({ model: appModel }).render();
+        Backbone.trigger('app-ready');
         logStartupTime();
     }
 
